@@ -2,8 +2,6 @@
 venv/
 __pycache__/
 *.pyc
-data/
-outputs/
 *.joblib
 
 .venv/
@@ -17,10 +15,24 @@ htmlcov/
 dist/
 build/
 *.egg-info/
-.env
 .vscode/
 
-venv/
-.venv/
-__pycache__/
-*.pyc
+# Keep folder structure but ignore actual data files
+data/bronze/*
+data/silver/*
+data/gold/*
+outputs/eda/*
+outputs/models/*
+outputs/predictions/*
+outputs/reports/*
+outputs/provenance/*
+
+# But do not ignore the .gitkeep placeholders
+!data/bronze/.gitkeep
+!data/silver/.gitkeep
+!data/gold/.gitkeep
+!outputs/eda/.gitkeep
+!outputs/models/.gitkeep
+!outputs/predictions/.gitkeep
+!outputs/reports/.gitkeep
+!outputs/provenance/.gitkeep
