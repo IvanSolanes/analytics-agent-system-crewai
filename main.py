@@ -1,25 +1,27 @@
 # main.py
-# WHY: The single entry point for the entire pipeline.
-# You run this file. It hands the brief to the Flow. Everything else
-# happens automatically from there.
+# WHY SO SHORT: Every decision lives in the Flow, steps, and agents.
+# This file has one job — load the API key, define the brief,
+# hand it to the Flow, and start it.
+# The entire 19-step pipeline runs from this single call.
 
 from dotenv import load_dotenv
-load_dotenv()   # reads OPENAI_API_KEY from .env before anything else runs
+load_dotenv()
+# WHY LOAD_DOTENV FIRST: The OpenAI client reads the API key at import
+# time. If we import the Flow before loading .env the key will be
+# missing and every agent call will fail with an authentication error.
 
 from state.models import AnalyticsState
+from flows.analytics_flow import RentAnalyticsFlow
 
 BRIEF = """
-A real-estate analytics team wants to understand rent drivers across cities,
-identify undervalued areas, and predict listing prices using listing data
-plus socioeconomic and geographic indicators.
+A real-estate analytics team wants to understand rent drivers across
+cities, identify undervalued areas, and predict listing prices using
+listing data plus socioeconomic and geographic indicators.
 """
 
 def main():
-    # Why we import the Flow here and not at the top:
-    # The Flow imports agents, which import the OpenAI client.
-    # The OpenAI client reads the API key at import time.
-    # load_dotenv() must run first or the key will be missing.
-    from flows.analytics_flow import RentAnalyticsFlow
+    print("Starting Rent Analytics Pipeline...")
+    print(f"Brief: {BRIEF.strip()[:80]}...")
 
     initial_state = AnalyticsState(raw_brief=BRIEF)
     flow = RentAnalyticsFlow()
