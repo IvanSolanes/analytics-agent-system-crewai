@@ -16,17 +16,62 @@ from guardrails.provenance import log_event
 
 def _clean_zillow(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Why: Zillow CSVs have inconsistent column names and mixed types.
-    We standardise to lowercase snake_case, cast rent to float,
-    and drop rows where the rent value is missing — they are useless
-    for training a rent prediction model.
+    Why: Real Zillow ZORI CSV has wide format — one column per month.
+    We melt it to long format (one row per region per month),
+    take the most recent month's value as the rent figure,
+    and standardise column names.
     """
-    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
-    df = df.rename(columns={"median_rent": "rent", "regionname": "city"})
-    df["rent"] = pd.to_numeric(df["rent"], errors="coerce")
-    df = df.dropna(subset=["rent"])
-    df = df.drop_duplicates(subset=["city", "state"])
-    return df[["city", "state", "rent"]].copy()
+    # Date columns are all columns after the metadata columns
+    meta_cols = ["RegionID", "SizeRank", "RegionName",
+                 "RegionType", "StateName"]
+    date_cols = [c for c in df.columns if c not in meta_cols]
+
+    if not date_cols:
+        return df
+
+    # Use the most recent month available
+    latest = sorted(date_cols)[-1]
+
+    result = df[meta_cols + [latest]].copy()
+    result = result.rename(columns={
+        "RegionName": "city",
+        "StateName":  "state",
+        latest:       "rent",
+    })
+    result["rent"] = pd.to_numeric(result["rent"], errors="coerce")
+    result = result.dropna(subset=["rent"])
+    result = result[result["RegionType"] == "msa"].copy()
+    result = result.drop_duplicates(subset=["city"])
+
+    return result[["city", "state", "rent"]].copy()
+
+
+def _clean_zillow_inventory(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Why: Inventory (supply) is a key rent driver.
+    Low inventory → high rents. We extract the latest month's value
+    per metro the same way we handle the rent index.
+    """
+    meta_cols = ["RegionID", "SizeRank", "RegionName",
+                 "RegionType", "StateName"]
+    date_cols = [c for c in df.columns if c not in meta_cols]
+
+    if not date_cols:
+        return df
+
+    latest = sorted(date_cols)[-1]
+
+    result = df[meta_cols + [latest]].copy()
+    result = result.rename(columns={
+        "RegionName": "city",
+        "StateName":  "state",
+        latest:       "inventory",
+    })
+    result["inventory"] = pd.to_numeric(result["inventory"], errors="coerce")
+    result = result[result["RegionType"] == "msa"].copy()
+    result = result.drop_duplicates(subset=["city"])
+
+    return result[["city", "state", "inventory"]].copy()
 
 
 def _clean_census(df: pd.DataFrame) -> pd.DataFrame:
@@ -60,9 +105,8 @@ def _clean_hud(df: pd.DataFrame) -> pd.DataFrame:
 
 # Map source names to their cleaning functions
 _CLEANERS = {
-    "zillow": _clean_zillow,
-    "census": _clean_census,
-    "hud":    _clean_hud,
+    "zillow":           _clean_zillow,
+    "zillow_inventory": _clean_zillow_inventory,
 }
 
 
@@ -121,58 +165,38 @@ def to_gold(silver_path: Path, run_id: str) -> Path:
     GOLD_DIR.mkdir(parents=True, exist_ok=True)
 
     # Load silver tables
-    zillow = _load_silver(silver_path, run_id, "zillow")
-    census = _load_silver(silver_path, run_id, "census")
-    hud    = _load_silver(silver_path, run_id, "hud")
+    zillow     = _load_silver(silver_path, run_id, "zillow")
+    inventory  = _load_silver(silver_path, run_id, "zillow_inventory")
 
-    # Start with zillow as the base — it has rent, city, state
-    df = zillow.copy()
-
-    # Join census on city/state if available
-    if census is not None and "city" in census.columns:
-        df = df.merge(census, on=["city", "state"], how="left")
-
-    # Join HUD on a fuzzy metro match — metro_area often contains city name
-    if hud is not None:
-        df = _join_hud(df, hud)
-
-    # ── Feature engineering ──────────────────────────────────────────
-    # Why here and not in preprocess: these are domain features, not
-    # statistical transformations. They encode business knowledge.
-
-    if "median_income" in df.columns:
-        df["rent_to_income"] = df["rent"] / df["median_income"].replace(0, np.nan)
-
-    if "fmr_1br" in df.columns:
-        df["fmr_gap"] = df["rent"] - df["fmr_1br"]
-
-    if "population" in df.columns:
-        df["log_population"] = np.log1p(df["population"])
-
-    # City tier: simple bucketing by population
-    # Why: City size has a strong non-linear effect on rent.
-    # A large city dummy captures what a linear population term misses.
-    if "population" in df.columns:
-        df["city_tier"] = pd.cut(
-            df["population"],
-            bins=[0, 100_000, 500_000, float("inf")],
-            labels=["small", "mid", "large"]
+    if zillow is None:
+        raise ValueError(
+            "Zillow silver file not found. "
+            "Check provenance log for EXTRACT_FAIL events."
         )
 
-    # ── Target column ────────────────────────────────────────────────
-    df[TARGET_COLUMN] = np.log(df["rent"])
+    df = zillow.copy()
 
-    # Drop rows where the target is missing or infinite
+    # Join inventory as a supply feature
+    if inventory is not None:
+        df = df.merge(inventory[["city", "inventory"]],
+                      on="city", how="left")
+
+    # Feature engineering
+    if "inventory" in df.columns:
+        df["log_inventory"] = np.log1p(df["inventory"])
+
+    # Target
+    df[TARGET_COLUMN] = np.log(df["rent"])
     df = df[np.isfinite(df[TARGET_COLUMN])].copy()
 
     dest = GOLD_DIR / f"{run_id}_gold.parquet"
     df.to_parquet(dest, index=False)
 
     log_event(run_id, "GOLD_OK", {
-        "rows":     len(df),
-        "cols":     list(df.columns),
-        "path":     str(dest),
-        "target":   TARGET_COLUMN,
+        "rows":   len(df),
+        "cols":   list(df.columns),
+        "path":   str(dest),
+        "target": TARGET_COLUMN,
     })
 
     return dest

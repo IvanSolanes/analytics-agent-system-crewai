@@ -237,50 +237,44 @@ def conformal_intervals(final_eval: FinalEvaluation,
                         preprocess_result,
                         run_id: str) -> PredictionOutput:
     """
-    Why conformal prediction over bootstrap or Bayesian intervals:
-    - No distributional assumptions needed
-    - Coverage guarantee is finite-sample, not asymptotic
-    - Works with any sklearn-compatible model
-    - MAPIE implements it in two lines
-
-    What coverage means: if we request 90% coverage, at least 90%
-    of prediction intervals on new data will contain the true value.
-    This is a mathematical guarantee, not a hope.
-
-    We use a calibration split from the training data.
-    Why not the test set: the test set must remain untouched.
+    WHY conformal prediction: coverage-guaranteed intervals with no
+    distributional assumptions. SplitConformalRegressor is the correct
+    MAPIE 1.x API. We use prefit=True since the model is already trained.
+    Sequence: fit model on train → conformalize on cal set → predict on test.
     """
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+    from mapie.metrics.regression import regression_coverage_score
 
     model  = joblib.load(final_eval.model_path)
     X_train, y_train = _load_train(preprocess_result)
 
     # Carve out calibration set from training data
-    cal_size = int(len(X_train) * CALIBRATION_SIZE)
-    X_cal, y_cal     = X_train[:cal_size],  y_train[:cal_size]
-    X_fit, y_fit     = X_train[cal_size:],  y_train[cal_size:]
+    cal_size        = int(len(X_train) * CALIBRATION_SIZE)
+    X_cal, y_cal    = X_train[:cal_size],  y_train[:cal_size]
+    X_fit, y_fit    = X_train[cal_size:],  y_train[cal_size:]
 
-    # Refit on the reduced training set, calibrate on cal set
+    # Refit on reduced training set
     model.fit(X_fit, y_fit)
 
-    # Why SplitConformalRegressor: this is the MAPIE 1.x equivalent
-    # of the old MapieRegressor with method="plus", cv="prefit".
-    # We pass confidence_level directly instead of alpha.
+    # Conformalize — correct MAPIE 1.x pattern
     conformal = SplitConformalRegressor(
         estimator=model,
-        confidence_level=CONFORMAL_COVERAGE_TARGET
+        confidence_level=CONFORMAL_COVERAGE_TARGET,
+        prefit=True,
     )
-    conformal.fit(X_cal, y_cal)
+    conformal.conformalize(X_cal, y_cal)
 
-    # Generate intervals on the test set
-    X_test, y_test = _load_test(preprocess_result)
-    y_pred, intervals = conformal.predict(X_test)
+    # Predict intervals on test set
+    X_test, y_test  = _load_test(preprocess_result)
+    y_pred, y_pred_interval = conformal.predict_interval(X_test)
 
-    lower = intervals[:, 0]
-    upper = intervals[:, 1]
+    # Intervals shape: (n_samples, 2, 1) — lower=[:,0,0], upper=[:,1,0]
+    lower = y_pred_interval[:, 0, 0]
+    upper = y_pred_interval[:, 1, 0]
 
-    # Empirical coverage — what fraction of true values fall inside?
-    coverage = float(np.mean((y_test >= lower) & (y_test <= upper)))
+    # Empirical coverage
+    coverage = float(regression_coverage_score(y_test, y_pred_interval)[0])
     width_median = float(np.median(upper - lower))
 
     if coverage < CONFORMAL_COVERAGE_TARGET:
@@ -289,7 +283,6 @@ def conformal_intervals(final_eval: FinalEvaluation,
             "target":   CONFORMAL_COVERAGE_TARGET,
         })
 
-    # Save predictions with intervals
     pred_df = pd.DataFrame({
         "y_true":   y_test,
         "y_pred":   y_pred,
@@ -300,9 +293,9 @@ def conformal_intervals(final_eval: FinalEvaluation,
     pred_df.to_parquet(pred_path, index=False)
 
     log_event(run_id, "CONFORMAL_DONE", {
-        "coverage_achieved":   coverage,
-        "interval_width_med":  width_median,
-        "predictions_path":    str(pred_path),
+        "coverage_achieved":  coverage,
+        "interval_width_med": width_median,
+        "predictions_path":   str(pred_path),
     })
 
     return PredictionOutput(

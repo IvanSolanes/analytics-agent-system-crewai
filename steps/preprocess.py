@@ -19,7 +19,7 @@ from sklearn.feature_selection import VarianceThreshold
 
 from config.settings import (
     TEST_SIZE, RANDOM_SEED, CALIBRATION_SIZE,
-    TARGET_COLUMN, MODELS_DIR,
+    TARGET_COLUMN, MODELS_DIR, GOLD_DIR,
     PCA_FEATURE_THRESHOLD, PCA_VARIANCE_TARGET
 )
 from state.models import EDASummary, PreprocessResult, SelectedFeatures
@@ -178,7 +178,6 @@ def build_pipeline(gold_path, eda: EDASummary,
     joblib.dump(preprocessor, pipeline_path)
 
     # ── Save train / test sets ───────────────────────────────────────
-    from config.settings import GOLD_DIR
     train_path = GOLD_DIR / f"{run_id}_train.parquet"
     test_path  = GOLD_DIR / f"{run_id}_test.parquet"
 
@@ -214,6 +213,14 @@ def select_features(preprocess_result: PreprocessResult,
     removes features that carry almost no information.
     We log exactly what was dropped and why.
     """
+
+    cache_path = MODELS_DIR / f"{run_id}_features_cache.json"
+    if cache_path.exists():
+        import json
+        cached = json.loads(cache_path.read_text())
+        log_event(run_id, "FEATURES_CACHED")
+        return SelectedFeatures(**cached)
+
     df = pd.read_parquet(preprocess_result.train_path)
     feature_cols = [c for c in df.columns if c != "target"]
 
@@ -230,6 +237,11 @@ def select_features(preprocess_result: PreprocessResult,
     log_event(run_id, "FEATURE_SELECTION", {
         "kept": len(kept), "dropped": len(dropped)
     })
+    
+    import json
+    cache_path.write_text(json.dumps({
+        "kept": kept, "dropped": dropped, "drop_reasons": drop_reasons
+    }))
 
     return SelectedFeatures(kept=kept, dropped=dropped,
                             drop_reasons=drop_reasons)

@@ -42,6 +42,23 @@ def bronze(manifest: BronzeManifest) -> ValidationReport:
     one by one.
     """
     all_failures = []
+    
+    # WHY: Zero files means every extraction failed.
+    # There is nothing to validate or transform.
+    # This must halt the pipeline immediately.
+    if not manifest.files:
+        return ValidationReport(
+            run_id=manifest.run_id,
+            failures=[ValidationFailure(
+                source="all_sources",
+                check="zero_files_extracted",
+                severity=Severity.critical,
+                detail=(
+                    "No files were successfully extracted. "
+                    "Check outputs/provenance for EXTRACT_FAIL events."
+                )
+            )]
+        )
 
     for bronze_file in manifest.files:
         log_event(manifest.run_id, "VALIDATE_START",

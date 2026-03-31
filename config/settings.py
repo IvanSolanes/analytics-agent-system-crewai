@@ -85,8 +85,28 @@ CALIBRATION_SIZE = 0.10   # 10% of training data reserved for calibration
 # each source. Defining them here means one place to update if a source
 # changes its schema.
 EXPECTED_COLUMNS = {
-    "zillow":   ["city", "state", "median_rent", "date"],
-    "census":   ["geo_id", "median_income", "unemployment_rate",
-                 "population", "education_rate"],
-    "hud":      ["metro_area", "fmr_0br", "fmr_1br", "fmr_2br"],
+    "zillow":           ["RegionID", "RegionName", "RegionType", "StateName"],
+    "zillow_inventory": ["RegionID", "RegionName", "RegionType", "StateName"],
+}
+
+# ── V1 Verified data sources ──────────────────────────────────────────
+# WHY HARD-CODED HERE: The source discovery agent returned plausible
+# but broken URLs on first run. For v1 we seed it with verified working
+# URLs so extraction actually succeeds. The agent still runs — it now
+# has these as reference anchors in its prompt.
+VERIFIED_SOURCES = {
+    "zillow_rents": {
+        "url": (
+            "https://files.zillowstatic.com/research/public_csvs/zori/"
+            "Metro_zori_uc_sfrcondomfr_sm_month.csv"
+        ),
+        "description": "Zillow Observed Rent Index by metro, monthly"
+    },
+    "hud_fmr": {
+        "url": (
+            "https://www.huduser.gov/portal/datasets/fmr/"
+            "fmr2024r/FY2024_4050_FMRs.csv"
+        ),
+        "description": "HUD Fair Market Rents 2024 by metro area"
+    },
 }
