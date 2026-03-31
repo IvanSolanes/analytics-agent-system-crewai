@@ -165,7 +165,7 @@ class RentAnalyticsFlow(Flow[AnalyticsState]):
             log_event(self.state.run_id, "HUMAN_REVIEW_REQUIRED",
                       {"verdict": self.state.review_result.overall_verdict})
             return "await_approval"
-        return "produce_report"
+        return "report_approved"
 
     @listen("await_approval")
     def wait_for_approval(self):
@@ -175,7 +175,7 @@ class RentAnalyticsFlow(Flow[AnalyticsState]):
               f"Verdict: {self.state.review_result.overall_verdict}\n"
               f"Check: outputs/provenance/{self.state.run_id}.jsonl\n")
 
-    @listen("produce_report")
+    @listen("report_approved")
     def produce_report(self):
         self.state.report_path = report.render(
             state=self.state,
